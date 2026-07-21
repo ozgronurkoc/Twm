@@ -1,7 +1,4 @@
-
-
-  """
-ai_service.py
+"""ai_service.py
 =============
 Kullanıcının serbest metin mesajını bir dil modeline gönderip, yapılması gereken
 görev işlemini (ekle / tamamla / iptal / not_ekle / listele) YAPISAL ve
