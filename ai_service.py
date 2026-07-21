@@ -5,16 +5,18 @@ görev işlemini (ekle / tamamla / iptal / not_ekle / listele) YAPISAL ve
 DOĞRULANMIŞ bir biçimde geri döndürür.
 
 Genel akış:
-    interpret_message("bugün markete gitmem lazım")
-    -> GorevKomutu(islem=Islem.EKLE, gorev_metni="markete gitmek", tarih=Tarih.BUGUN)
+    interpret_message("acil: bugün markete gitmem lazım")
+    -> GorevKomutu(islem=EKLE, gorev_metni="markete gidilecek",
+                   oncelik=YUKSEK, kategori=EV, tarih=BUGUN)
 
 Öne çıkan özellikler:
     * Pydantic ile tip + iş kuralı doğrulaması.
     * Ağ / API hataları için otomatik yeniden deneme ve net istisnalar.
     * Model anlamsız/eksik çıktı ürettiğinde çökmek yerine 'belirsiz'e düşme.
     * 'bugün'/'yarın' -> gerçek `date` dönüşümü (veritabanı için hazır).
-    * Test edilebilirlik için enjekte edilebilir client.
+    * Öncelik / kategori / listeleme kapsamı çıkarımı.
     * `history` parametresiyle önceki konuşma turlarını bağlam olarak alma.
+    * Test edilebilirlik için enjekte edilebilir client.
 
 Gereksinim: pydantic>=2 (güncel `openai` sürümleri zaten bunu kurar).
 """
@@ -59,9 +61,32 @@ class Tarih(str, Enum):
     YARIN = "yarın"
 
     def to_date(self, *, bugun: Optional[date] = None) -> date:
-        """Göreceli tarihi gerçek bir `date` nesnesine çevirir."""
         base = bugun or date.today()
         return base + timedelta(days=1) if self == Tarih.YARIN else base
+
+
+class Oncelik(str, Enum):
+    YUKSEK = "🔴 Yüksek"
+    ORTA = "🟡 Orta"
+    DUSUK = "🟢 Düşük"
+
+
+class Kategori(str, Enum):
+    IS = "💼 İş"
+    EV = "🏠 Ev"
+    SAGLIK = "❤️ Sağlık"
+    KISISEL = "👤 Kişisel"
+    DIGER = "📌 Diğer"
+
+
+class Kapsam(str, Enum):
+    """Yalnızca `listele` işleminde anlamlıdır."""
+
+    BUGUN = "bugün"
+    YARIN = "yarın"
+    HAFTA = "hafta"
+    TUMU = "tümü"
+    GECIKMIS = "gecikmiş"
 
 
 # Bu işlemler için `gorev_metni` mutlaka bulunmalı.
@@ -75,6 +100,9 @@ class GorevKomutu(BaseModel):
     gorev_metni: Optional[str] = None
     not_metni: Optional[str] = None
     tarih: Tarih = Tarih.BUGUN
+    oncelik: Oncelik = Oncelik.ORTA
+    kategori: Kategori = Kategori.DIGER
+    kapsam: Kapsam = Kapsam.BUGUN  # sadece listele işleminde kullanılır
     yanit: Optional[str] = None
 
     @field_validator("gorev_metni", "not_metni", "yanit", mode="before")
@@ -82,7 +110,6 @@ class GorevKomutu(BaseModel):
     def _bosluklari_temizle(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        # Baştaki/sondaki ve tekrarlanan boşlukları sadeleştir; boşsa None yap.
         v = " ".join(str(v).split())
         return v or None
 
@@ -96,7 +123,6 @@ class GorevKomutu(BaseModel):
 
     @property
     def hedef_tarih(self) -> date:
-        """Görevin ait olduğu gerçek takvim tarihi."""
         return self.tarih.to_date()
 
 
@@ -138,6 +164,36 @@ TOOLS = [
                         "enum": [t.value for t in Tarih],
                         "description": "Görevin hangi güne ait olduğu. Belirtilmemişse 'bugün' varsay.",
                     },
+                    "oncelik": {
+                        "type": "string",
+                        "enum": [o.value for o in Oncelik],
+                        "description": (
+                            "Sadece 'ekle' işleminde: görevin önem derecesi. "
+                            "'acil', 'hemen', 'mutlaka' gibi ifadeler -> Yüksek. "
+                            "'aceleye gerek yok', 'ne zaman olsa olur' -> Düşük. "
+                            "Belirtilmemişse Orta."
+                        ),
+                    },
+                    "kategori": {
+                        "type": "string",
+                        "enum": [k.value for k in Kategori],
+                        "description": (
+                            "Sadece 'ekle' işleminde: görevin ait olduğu alan "
+                            "(iş/toplantı/rapor -> İş, market/fatura/temizlik -> Ev, "
+                            "doktor/dişçi/spor -> Sağlık, arkadaş/aile/hobi -> Kişisel, "
+                            "belirsizse Diğer)."
+                        ),
+                    },
+                    "kapsam": {
+                        "type": "string",
+                        "enum": [k.value for k in Kapsam],
+                        "description": (
+                            "Sadece 'listele' işleminde: kullanıcı hangi kapsamda liste "
+                            "istiyor. 'bu hafta/haftalık' -> hafta, 'tüm görevler/hepsi' "
+                            "-> tümü, 'geciken/yapmadıklarım/biriken işler' -> gecikmiş, "
+                            "'yarınki liste' -> yarın, belirtilmemişse bugün."
+                        ),
+                    },
                     "yanit": {
                         "type": "string",
                         "description": (
@@ -177,17 +233,9 @@ def interpret_message(
 ) -> GorevKomutu:
     """Serbest metni doğrulanmış bir `GorevKomutu`'na çevirir.
 
-    `history` verilirse (OpenAI mesaj formatında, [{"role": ..., "content": ...}])
-    önceki konuşma turları da modele bağlam olarak gönderilir; böylece agent
-    önceki mesajları hatırlıyormuş gibi doğal bir sohbet akışı kurabilir.
-
     Fırlatabileceği hatalar:
         ValueError      -- `user_text` boşsa.
         AIServiceError  -- API'ye ulaşılamazsa veya model yapısal yanıt vermezse.
-
-    Model geçerli ama anlamsız/eksik bir çıktı üretirse (ör. metinsiz "ekle"),
-    çökmek yerine `islem=belirsiz` döndürülür; böylece bot kullanıcıdan
-    netleştirme isteyebilir.
     """
     if not user_text or not user_text.strip():
         raise ValueError("user_text boş olamaz.")
@@ -202,7 +250,7 @@ def interpret_message(
     try:
         response = client.chat.completions.create(
             model=MODEL,
-            temperature=0,  # çıkarım işi -> deterministik olsun
+            temperature=0,
             messages=messages,
             tools=TOOLS,
             tool_choice={"type": "function", "function": {"name": "gorev_islemi"}},
@@ -229,22 +277,3 @@ def interpret_message(
 
     logger.debug("Yorumlanan komut: %s", komut)
     return komut
-
-
-# --- Hızlı manuel test ------------------------------------------------------
-# NOT: Bu blok gerçek API çağrısı yapar (ücret/kota harcar).
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    ornekler = [
-        "bugün markete gitmem lazım",
-        "raporu yazdım",
-        "toplantı notu: saat 3'e çekildi",
-        "yarınki listeyi göster",
-        "hava bugün çok güzel",  # belirsiz beklenir
-    ]
-    for metin in ornekler:
-        komut = interpret_message(metin)
-        print(
-            f"{metin!r:45} -> {komut.islem.value:9} | "
-            f"gorev={komut.gorev_metni!r} | tarih={komut.hedef_tarih} | yanit={komut.yanit!r}"
-)
