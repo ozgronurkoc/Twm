@@ -15,12 +15,22 @@ logger = logging.getLogger(__name__)
 
 TZ = pytz.timezone(config.TIMEZONE)
 
+_DURUM_EMOJI = {"Yapılacak": "🔲", "Yapıldı": "✅", "İptal": "❌"}
+
 
 def _date_str(gun: str) -> str:
     today = datetime.now(TZ).date()
     if gun == "yarın":
         return (today + timedelta(days=1)).isoformat()
     return today.isoformat()
+
+
+def _today() -> datetime.date:
+    return datetime.now(TZ).date()
+
+
+def _format_task_line(t: dict) -> str:
+    return f"{_DURUM_EMOJI.get(t['durum'], '🔲')} {t['öncelik']} {t['görev']} ({t['kategori']})"
 
 
 async def _reply(update: Update, chat_id, text: str) -> None:
@@ -34,9 +44,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Merhaba! Görevlerini bana yazman yeterli.\n\n"
         "Örnekler:\n"
         "- \"bugün faturayı ödemem lazım\"\n"
-        "- \"yarın doktora gitmem lazım\"\n"
+        "- \"acil, yarın doktora gitmem lazım\"\n"
         "- \"fatura ödeme işi iptal oldu\"\n"
         "- \"faturayı ödedim\"\n"
+        "- \"bu hafta neler var\" ya da \"geciken işlerim var mı\"\n"
         "- /liste yazarak bugünkü listeni görebilirsin\n"
         "- /sifirla yazarak hafızamı temizleyebilirsin"
     )
@@ -47,18 +58,60 @@ async def sifirla(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Tamamdır, önceki konuşmaları unuttum. Baştan başlıyoruz!")
 
 
+def _render_liste(tasks: list[dict], overdue: list[dict] | None = None, baslik: str = "📋 Liste") -> str:
+    lines = [f"{baslik}\n"]
+    if overdue:
+        lines.append("⏳ Gecikmiş:")
+        for t in overdue:
+            lines.append(_format_task_line(t))
+        lines.append("")
+    if tasks:
+        for t in tasks:
+            lines.append(_format_task_line(t))
+    elif not overdue:
+        lines.append("Bu kapsamda henüz bir görev yok.")
+    return "\n".join(lines)
+
+
 async def liste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = _date_str("bugün")
     tasks = notion_service.list_tasks(date_str)
-    if not tasks:
-        await update.message.reply_text("Bugün için henüz bir görev yok.")
-        return
+    overdue = notion_service.list_overdue_tasks(date_str)
+    await update.message.reply_text(_render_liste(tasks, overdue, "📋 Bugünün listesi"))
 
-    lines = ["📋 Bugünün listesi:\n"]
-    emoji = {"Yapılacak": "🔲", "Yapıldı": "✅", "İptal": "❌"}
-    for t in tasks:
-        lines.append(f"{emoji.get(t['durum'], '🔲')} {t['görev']} ({t['durum']})")
-    await update.message.reply_text("\n".join(lines))
+
+async def _handle_listele(update: Update, context: ContextTypes.DEFAULT_TYPE, kapsam: ai_service.Kapsam):
+    today = _today()
+
+    if kapsam is ai_service.Kapsam.YARIN:
+        date_str = _date_str("yarın")
+        tasks = notion_service.list_tasks(date_str)
+        text = _render_liste(tasks, None, "📋 Yarının listesi")
+
+    elif kapsam is ai_service.Kapsam.HAFTA:
+        start = today.isoformat()
+        end = (today + timedelta(days=6)).isoformat()
+        tasks = notion_service.list_tasks_range(start, end)
+        text = _render_liste(tasks, None, "🗓️ Bu haftanın listesi")
+
+    elif kapsam is ai_service.Kapsam.TUMU:
+        tasks = notion_service.list_all_open_tasks()
+        text = _render_liste(tasks, None, "📚 Tüm açık görevler")
+
+    elif kapsam is ai_service.Kapsam.GECIKMIS:
+        overdue = notion_service.list_overdue_tasks(today.isoformat())
+        if not overdue:
+            text = "⏳ Gecikmiş bir görevin yok, harikasın! 🎉"
+        else:
+            text = _render_liste([], overdue, "⏳ Geciken görevler")
+
+    else:  # BUGUN (varsayılan)
+        date_str = today.isoformat()
+        tasks = notion_service.list_tasks(date_str)
+        overdue = notion_service.list_overdue_tasks(date_str)
+        text = _render_liste(tasks, overdue, "📋 Bugünün listesi")
+
+    await update.message.reply_text(text)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,8 +123,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     memory_service.add_message(chat_id, "user", user_text)
-    # Az önce eklediğimiz mevcut mesaj, ai_service'e ayrıca gönderileceği için
-    # geçmiş listesinden çıkarıyoruz (tekrar etmesin diye).
     history = memory_service.get_recent_messages(
         chat_id, limit=memory_service.DEFAULT_HISTORY_LIMIT + 1
     )[:-1]
@@ -92,37 +143,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     yanit = komut.yanit or "Tamamdır."
 
     if islem is ai_service.Islem.EKLE:
-        notion_service.add_task(gorev_metni, date_str)
+        notion_service.add_task(
+            gorev_metni, date_str, oncelik=komut.oncelik.value, kategori=komut.kategori.value
+        )
         await _reply(update, chat_id, yanit)
 
     elif islem is ai_service.Islem.TAMAMLA:
-        found = notion_service.mark_task_status(gorev_metni, "Yapıldı", date_str)
-        if found:
-            await _reply(update, chat_id, yanit)
-        else:
-            await _reply(update, chat_id, f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
+        match = notion_service.mark_task_status(gorev_metni, "Yapıldı", date_str)
+        await _reply(update, chat_id, _sonuc_mesaji(match, yanit, gorev_metni))
 
     elif islem is ai_service.Islem.IPTAL:
-        found = notion_service.mark_task_status(gorev_metni, "İptal", date_str)
-        if found:
-            await _reply(update, chat_id, yanit)
-        else:
-            await _reply(update, chat_id, f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
+        match = notion_service.mark_task_status(gorev_metni, "İptal", date_str)
+        await _reply(update, chat_id, _sonuc_mesaji(match, yanit, gorev_metni))
 
     elif islem is ai_service.Islem.NOT_EKLE:
         not_metni = komut.not_metni or ""
-        found = notion_service.add_note_to_task(gorev_metni, not_metni, date_str)
-        if found:
-            await _reply(update, chat_id, yanit)
-        else:
-            await _reply(update, chat_id, f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
+        match = notion_service.add_note_to_task(gorev_metni, not_metni, date_str)
+        await _reply(update, chat_id, _sonuc_mesaji(match, yanit, gorev_metni))
 
     elif islem is ai_service.Islem.LISTELE:
         await _reply(update, chat_id, yanit)
-        await liste(update, context)
+        await _handle_listele(update, context, komut.kapsam)
 
     else:
         await _reply(update, chat_id, yanit)
+
+
+def _sonuc_mesaji(match: notion_service.MatchResult, basarili_yanit: str, gorev_metni: str) -> str:
+    """Eşleştirme sonucuna göre kullanıcıya gösterilecek metni üretir."""
+    if match.page:
+        return basarili_yanit
+    if match.candidates:
+        secenekler = "\n".join(f"- {c}" for c in match.candidates)
+        return (
+            f"\"{gorev_metni}\" ile birden fazla görev eşleşti, hangisini "
+            f"kastettiğini netleştirir misin?\n{secenekler}"
+        )
+    return f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım."
 
 
 def main():
