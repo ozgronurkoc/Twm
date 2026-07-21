@@ -14,6 +14,7 @@ Genel akış:
     * Model anlamsız/eksik çıktı ürettiğinde çökmek yerine 'belirsiz'e düşme.
     * 'bugün'/'yarın' -> gerçek `date` dönüşümü (veritabanı için hazır).
     * Test edilebilirlik için enjekte edilebilir client.
+    * `history` parametresiyle önceki konuşma turlarını bağlam olarak alma.
 
 Gereksinim: pydantic>=2 (güncel `openai` sürümleri zaten bunu kurar).
 """
@@ -168,8 +169,17 @@ def _get_client() -> OpenAI:
 
 
 # --- Ana giriş noktası ------------------------------------------------------
-def interpret_message(user_text: str, *, client: Optional[OpenAI] = None) -> GorevKomutu:
+def interpret_message(
+    user_text: str,
+    *,
+    history: Optional[list[dict]] = None,
+    client: Optional[OpenAI] = None,
+) -> GorevKomutu:
     """Serbest metni doğrulanmış bir `GorevKomutu`'na çevirir.
+
+    `history` verilirse (OpenAI mesaj formatında, [{"role": ..., "content": ...}])
+    önceki konuşma turları da modele bağlam olarak gönderilir; böylece agent
+    önceki mesajları hatırlıyormuş gibi doğal bir sohbet akışı kurabilir.
 
     Fırlatabileceği hatalar:
         ValueError      -- `user_text` boşsa.
@@ -184,14 +194,16 @@ def interpret_message(user_text: str, *, client: Optional[OpenAI] = None) -> Gor
 
     client = client or _get_client()
 
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
+
     try:
         response = client.chat.completions.create(
             model=MODEL,
             temperature=0,  # çıkarım işi -> deterministik olsun
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
-            ],
+            messages=messages,
             tools=TOOLS,
             tool_choice={"type": "function", "function": {"name": "gorev_islemi"}},
         )
@@ -235,4 +247,4 @@ if __name__ == "__main__":
         print(
             f"{metin!r:45} -> {komut.islem.value:9} | "
             f"gorev={komut.gorev_metni!r} | tarih={komut.hedef_tarih} | yanit={komut.yanit!r}"
-        )
+)
