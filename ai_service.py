@@ -1,4 +1,6 @@
-"""
+
+
+  """
 ai_service.py
 =============
 Kullanıcının serbest metin mesajını bir dil modeline gönderip, yapılması gereken
@@ -29,7 +31,6 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
 import config
-
 from prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ class Tarih(str, Enum):
     def to_date(self, *, bugun: Optional[date] = None) -> date:
         """Göreceli tarihi gerçek bir `date` nesnesine çevirir."""
         base = bugun or date.today()
-        return base + timedelta(days=1) if self is Tarih.YARIN else base
+        return base + timedelta(days=1) if self == Tarih.YARIN else base
 
 
 # Bu işlemler için `gorev_metni` mutlaka bulunmalı.
@@ -80,7 +81,7 @@ class GorevKomutu(BaseModel):
 
     @field_validator("gorev_metni", "not_metni", "yanit", mode="before")
     @classmethod
-    def _bosluklari_temizle(cls, v):
+    def _bosluklari_temizle(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
         # Baştaki/sondaki ve tekrarlanan boşlukları sadeleştir; boşsa None yap.
@@ -88,10 +89,10 @@ class GorevKomutu(BaseModel):
         return v or None
 
     @model_validator(mode="after")
-    def _is_kurallarini_dogrula(self):
+    def _is_kurallarini_dogrula(self) -> GorevKomutu:
         if self.islem in _GOREV_METNI_GEREKLI and not self.gorev_metni:
             raise ValueError(f"'{self.islem.value}' işlemi için 'gorev_metni' gerekli.")
-        if self.islem is Islem.NOT_EKLE and not self.not_metni:
+        if self.islem == Islem.NOT_EKLE and not self.not_metni:
             raise ValueError("'not_ekle' işlemi için 'not_metni' gerekli.")
         return self
 
@@ -102,8 +103,6 @@ class GorevKomutu(BaseModel):
 
 
 # --- Model / tool tanımı ---------------------------------------------------
-# enum değerleri tek kaynaktan (yukarıdaki Enum'lar) türetiliyor ki
-# şema ile kod arasında tutarsızlık oluşmasın.
 TOOLS = [
     {
         "type": "function",
