@@ -105,3 +105,4 @@ kullanılır; bu yüzden aynı görev her seferinde AYNI biçimde yazılmalıdı
 "selam, nasıl gidiyor?"
   -> belirsiz
   -> yanit="İyidir, sen nasılsın? Bir görev eklememi ister misin? 😊"
+"""
