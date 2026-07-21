@@ -12,3 +12,6 @@ DATABASE_TITLE = "Görevler"
 
 # Türkiye saat dilimi - "bugün" / "yarın" hesaplamaları için kullanılır.
 TIMEZONE = "Europe/Istanbul"
+
+# Sohbet hafızasının tutulacağı SQLite dosyasının yolu.
+MEMORY_DB_PATH = os.environ.get("MEMORY_DB_PATH", "twm_memory.db")
