@@ -51,43 +51,49 @@ async def liste(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     try:
-        result = ai_service.interpret_message(user_text)
-    except Exception:
+        komut = ai_service.interpret_message(user_text)
+    except ValueError:
+        await update.message.reply_text("Boş bir mesaj gönderdin, tekrar dener misin?")
+        return
+    except ai_service.AIServiceError:
         logger.exception("AI yorumlama hatası")
-        await update.message.reply_text("Mesajını anlayamadım, tekrar dener misin?")
+        await update.message.reply_text(
+            "Şu an isteğini işleyemedim (servis hatası), birazdan tekrar dener misin?"
+        )
         return
 
-    islem = result.get("islem")
-    gorev_metni = result.get("gorev_metni")
-    date_str = _date_str(result.get("tarih", "bugün"))
+    islem = komut.islem
+    gorev_metni = komut.gorev_metni
+    # Tarih hesaplamasını tek yerden (İstanbul saatiyle) yapmaya devam ediyoruz.
+    date_str = _date_str(komut.tarih.value)
 
-    if islem == "ekle":
+    if islem is ai_service.Islem.EKLE:
         notion_service.add_task(gorev_metni, date_str)
         await update.message.reply_text(f"✅ Eklendi: \"{gorev_metni}\"")
 
-    elif islem == "tamamla":
+    elif islem is ai_service.Islem.TAMAMLA:
         found = notion_service.mark_task_status(gorev_metni, "Yapıldı", date_str)
         if found:
             await update.message.reply_text(f"✅ Tamamlandı olarak işaretlendi: \"{gorev_metni}\"")
         else:
             await update.message.reply_text(f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
 
-    elif islem == "iptal":
+    elif islem is ai_service.Islem.IPTAL:
         found = notion_service.mark_task_status(gorev_metni, "İptal", date_str)
         if found:
             await update.message.reply_text(f"❌ İptal edildi olarak işaretlendi: \"{gorev_metni}\"")
         else:
             await update.message.reply_text(f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
 
-    elif islem == "not_ekle":
-        not_metni = result.get("not_metni", "")
+    elif islem is ai_service.Islem.NOT_EKLE:
+        not_metni = komut.not_metni or ""
         found = notion_service.add_note_to_task(gorev_metni, not_metni, date_str)
         if found:
             await update.message.reply_text(f"📝 Not eklendi: \"{gorev_metni}\" -> {not_metni}")
         else:
             await update.message.reply_text(f"\"{gorev_metni}\" ile eşleşen bir görev bulamadım.")
 
-    elif islem == "listele":
+    elif islem is ai_service.Islem.LISTELE:
         await liste(update, context)
 
     else:
