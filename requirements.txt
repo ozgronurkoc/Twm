@@ -8,7 +8,7 @@ python-dotenv==1.0.1
 pytz==2024.1
 
 # --- Faz 0: hafıza altyapısı ---
-psycopg[binary]==3.2.1     # Postgres (Supabase) sürücüsü
+psycopg[binary]==3.2.9     # Postgres (Supabase) sürücüsü
 pgvector==0.3.2            # pgvector Python adaptörü (vector tipi)
 
 # --- Faz 6: zamanlanmış arka plan işleri ---
