@@ -7,6 +7,14 @@ vec_episode, vec_knowledge, vec_reflection). Böylece PDF'in "katmanları tek
 vektör DB'ye karıştırma" kuralı korunur ve arama her zaman type-scoped olur.
 
 Benzerlik: cosine distance (<=>). Skor = 1 - distance (0-1, büyük daha iyi).
+
+NOT (düzeltme): Parametre olarak gönderilen Python float listesi, psycopg3
+tarafında bazen otomatik olarak pgvector'ın `vector` tipine değil, PostgreSQL'in
+genel `double precision[]` (float8 dizisi) tipine cast edilir. `<=>` operatörü
+`double precision[]` için tanımlı olmadığından bu durumda
+"operator does not exist: vector <=> double precision[]" hatası alınır.
+Çözüm: parametreyi SQL içinde açıkça `%s::vector` ile cast etmek — bu, driver
+sürümünden/register_vector davranışından bağımsız olarak her zaman çalışır.
 """
 from __future__ import annotations
 
@@ -53,7 +61,7 @@ class PgVectorStore(VectorStore):
             cur.execute(
                 f"""
                 INSERT INTO {table} (memory_id, embedding)
-                VALUES (%s, %s)
+                VALUES (%s, %s::vector)
                 ON CONFLICT (memory_id) DO UPDATE SET embedding = EXCLUDED.embedding
                 """,
                 (memory_id, embedding),
@@ -77,9 +85,9 @@ class PgVectorStore(VectorStore):
                 table = _vec_table(mem_type)
                 cur.execute(
                     f"""
-                    SELECT memory_id, 1 - (embedding <=> %s) AS score
+                    SELECT memory_id, 1 - (embedding <=> %s::vector) AS score
                     FROM {table}
-                    ORDER BY embedding <=> %s
+                    ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
                     (embedding, embedding, k),
