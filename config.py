@@ -49,6 +49,6 @@ EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "1536"))
 
 
 # --- LLM -------------------------------------------------------------------
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
 OPENAI_TIMEOUT = float(os.environ.get("OPENAI_TIMEOUT", "30"))
 OPENAI_MAX_RETRIES = int(os.environ.get("OPENAI_MAX_RETRIES", "3"))
