@@ -1,6 +1,6 @@
 # --- Mevcut Twm bağımlılıkları (korunuyor) ---
 python-telegram-bot==21.4
-openai==1.40.0
+openai>=2.40.0,<3           # gpt-5.6 (Sol/Terra/Luna) + Responses API için güncel SDK
 httpx==0.27.2
 pydantic==2.8.2
 notion-client==2.2.1
@@ -8,7 +8,7 @@ python-dotenv==1.0.1
 pytz==2024.1
 
 # --- Faz 0: hafıza altyapısı ---
-psycopg[binary]==3.2.9     # Postgres (Supabase) sürücüsü
+psycopg[binary]==3.2.1     # Postgres (Supabase) sürücüsü
 pgvector==0.3.2            # pgvector Python adaptörü (vector tipi)
 
 # --- Faz 6: zamanlanmış arka plan işleri ---
