@@ -4,9 +4,12 @@ DEPENDENCY INJECTION birleştiricisi.
 
 Config'teki sağlayıcı seçimlerine göre somut infra implementasyonlarını kurar ve
 MemoryManager'a inject eder. Uygulamanın geri kalanı yalnızca `build_memory_manager()`
-çağırır; hangi Postgres/OpenAI sınıfının kullanıldığını bilmez.
+çağırır; hangi Postgres/OpenAI implementasyonunun kullanıldığını bilmez.
 
 Bu dosya, somut sınıfların (infra) bilindiği TEK yerdir. core/ katmanı temiz kalır.
+
+DÜZELTME: `_build_llm()` artık `config.REASONING_EFFORT`'u da OpenAILLMProvider'a
+geçiriyor (gpt-5.6-luna gibi reasoning modelleri için gerekli).
 """
 from __future__ import annotations
 
@@ -43,7 +46,6 @@ def _build_vector_store() -> VectorStore:
             raise RuntimeError("VECTOR_PROVIDER=pgvector için DATABASE_URL gerekli.")
         return PgVectorStore(config.DATABASE_URL)
 
-    # SQLite dev modunda gerçek vektör araması yok -> no-op ya da bellek-içi.
     if config.VECTOR_PROVIDER == "inmemory":
         from app.infra.vector.inmemory_store import InMemoryVectorStore
 
@@ -78,6 +80,7 @@ def _build_llm() -> LLMProvider:
             model=config.OPENAI_MODEL,
             timeout=config.OPENAI_TIMEOUT,
             max_retries=config.OPENAI_MAX_RETRIES,
+            reasoning_effort=getattr(config, "REASONING_EFFORT", "minimal"),
         )
     raise ValueError(f"Bilinmeyen LLM_PROVIDER: {config.LLM_PROVIDER}")
 
